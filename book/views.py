@@ -166,12 +166,21 @@ def book_list(request,field_id = 0, field_type = 'src'):
     '''
     books = None
 
+    filter_field = {
+        'publisher': 'publisher_id',
+        'author': 'authors__id'
+    }
+    field_dict = {filter_field.get(field_type): field_id} if field_type in ('publisher', 'author') else {}
+    books = models.Book.objects.filter(**field_dict).values('id', 'title', 'price', 'publish_date', 'publisher__name').order_by('-id')
+
+    ''' 注意上面得简化方法
     if field_type == 'publisher':
         books = models.Book.objects.filter(publisher_id=field_id).values('id','title','price','publish_date','publisher__name').order_by('-id')
     elif field_type == 'author':
         books = models.Book.objects.filter(authors__id=field_id).values('id','title','price','publish_date','publisher__name').order_by('-id')
     else:
-        books = models.Book.objects.all().values('id', 'title', 'price', 'publish_date', 'publisher__name').order_by('-id')
+         books = models.Book.objects.all().values('id', 'title', 'price', 'publish_date', 'publisher__name').order_by('-id')
+    '''
 
     current_page_num = request.GET.get('page', 1)
     page_obj = MyPaginator(books,current_page_num)
