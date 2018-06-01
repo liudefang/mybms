@@ -4,20 +4,25 @@ from django.core import serializers
 from django.views import View
 import json
 import datetime
-import hashlib
 import logging
 from functools import wraps
 
 from book import models
 from book import myforms
 from utils.mypage import MyPaginator
+from utils.hash_pwd import salt_pwd
 
 logger = logging.getLogger(__name__)
 # 生成一个名为collect的实例
 collect_logger = logging.getLogger('collect')
 
-# 判断用户有没有登录得装饰器
+
 def check_login(func):
+    '''
+    判断用户有没有登录得装饰器
+    :param func:
+    :return:
+    '''
     @wraps(func)
     def inner(request,*args,**kwargs):
         # 拿到当前访问网址
@@ -30,20 +35,30 @@ def check_login(func):
     return inner
 
 
-# 登录
 # def login(request):
+#     '''
+#     登录
+#     :param request:
+#     :return:
+#     '''
 #     login_form = myforms.LoginForm()
 #     return render(request,'login.html',{'login_form':login_form})
-
-
-# 注册
+#
+#
 # def register(request):
+#     '''
+#     注册
+#     :param request:
+#     :return:
+#     '''
 #     register_form = myforms.LoginForm()
 #     return render(request,'register.html',{'register_form':register_form})
 
 
-# CBV 登录视图
 class LoginView(View):
+    '''
+    CBV 登录视图
+    '''
 
     def get(self,request):
         login_form = myforms.LoginForm()
@@ -54,9 +69,7 @@ class LoginView(View):
         if login_form.is_valid():
             username = login_form.cleaned_data.get('username')
             password = login_form.cleaned_data.get('password')
-            # 把用户名当作盐 用户名只能唯一
-            password = hashlib.md5(password.encode('utf-8') + username.encode('utf-8')).hexdigest()
-
+            password = salt_pwd(password, username)
             if models.UserInfo.objects.filter(name=username,pwd=password):
                 # 设置session
                 request.session['user'] = username
@@ -80,9 +93,10 @@ class LoginView(View):
             return render(request, 'login.html', {'login_form': login_form})
 
 
-# CBV 注册视图
 class RegisterView(View):
-
+    '''
+    CBV 注册视图
+    '''
     # @method_decorator(check_login)  给cbv 加装饰器 逻辑上不应该加在这里，但可以验证装饰器加成功了
     def dispatch(self, request, *args, **kwargs):
         return super(RegisterView, self).dispatch(request,*args,**kwargs)
@@ -99,9 +113,8 @@ class RegisterView(View):
             r_password = request.POST.get('r_password')
             if r_password == password:
                 # 后台也需要判断用户名是否已存在，
-                if not models.UserInfo.objects.filter(name=username):
-                    # 把用户名当作盐 用户名只能唯一
-                    password = hashlib.md5(password.encode('utf-8')+username.encode('utf-8')).hexdigest()
+                if not models.UserInfo.objects.filter(name=username).first():
+                    password = salt_pwd(password,username)
                     models.UserInfo.objects.create(name=username,pwd=password)
 
                     # 注册成功之后，设置session登录状态
@@ -117,33 +130,46 @@ class RegisterView(View):
         return render(request,'register.html',{'register_form':register_form})
 
 
-# 查看用户是否已经存在
 def exist_user(request):
+    '''
+    查看用户是否已经存在
+    :param request:
+    :return:
+    '''
     if request.method == 'POST':
         username = request.POST.get('username')
         user_obj = models.UserInfo.objects.filter(name=username).first()
-        if user_obj:
-            reg = {'status':1,'msg':'用户已存在'}
-        else:
-            reg = {'status':0,'msg':'用户不存在'}
+
+        reg = {'status':1,'msg':'用户已存在'} if user_obj else {'status':0,'msg':'用户不存在'}
 
         return HttpResponse(json.dumps(reg))
 
 
-# 注销
 def logout(request):
+    '''
+    注销
+    :param request:
+    :return:
+    '''
     request.session.delete()
     return redirect(reverse('book:login'))
 
 
-# 书列表 3中情况 从book_list下来的书  从publisher_list 下来的书 从author_list下来的书
 # @check_login
-def book_list(request,id = 0, type = 'src'):
+def book_list(request,field_id = 0, field_type = 'src'):
+    '''
+    书列表 3中情况 从book_list下来的书  从publisher_list 下来的书 从author_list下来的书
+    :param request:
+    :param field_id:
+    :param field_type:  /publisher_list / author_list
+    :return:
+    '''
     books = None
-    if type == 'publisher':
-        books = models.Book.objects.filter(publisher_id=id).values('id','title','price','publish_date','publisher__name').order_by('-id')
-    elif type == 'author':
-        books = models.Book.objects.filter(authors__id=id).values('id','title','price','publish_date','publisher__name').order_by('-id')
+
+    if field_type == 'publisher':
+        books = models.Book.objects.filter(publisher_id=field_id).values('id','title','price','publish_date','publisher__name').order_by('-id')
+    elif field_type == 'author':
+        books = models.Book.objects.filter(authors__id=field_id).values('id','title','price','publish_date','publisher__name').order_by('-id')
     else:
         books = models.Book.objects.all().values('id', 'title', 'price', 'publish_date', 'publisher__name').order_by('-id')
 
@@ -158,11 +184,17 @@ def book_list(request,id = 0, type = 'src'):
     return render(request,'book_list.html',ret_dic)
 
 
-# 删除一本书 3中情况 从book_list下来的书  从publisher_list 下来的书 从author_list下来的书
-def del_book(request, id = 0, type = 'src'):
+def del_book(request, field_id = 0, field_type = 'src'):
+    '''
+    删除一本书 3中情况 从book_list下来的书  从publisher_list 下来的书 从author_list下来的书
+    :param request:
+    :param field_id:
+    :param field_type:
+    :return:
+    '''
     delete_id = request.POST.get('delete_id')
-    if type == 'author':   # 清除绑定关系
-        author_id = id
+    if field_type == 'author':   # 清除绑定关系
+        author_id = field_id
         author_obj = models.Author.objects.filter(id = author_id).first()
         try:
             author_obj.books.remove(delete_id)
@@ -180,14 +212,20 @@ def del_book(request, id = 0, type = 'src'):
     return HttpResponse(json.dumps(reg))
 
 
-# 增加书
-def add_book(request,id = 0, type = 'src'):
+def add_book(request,field_id = 0, field_type = 'src'):
+    '''
+    增加书
+    :param request:
+    :param field_id:
+    :param field_type:
+    :return:
+    '''
     current_publisher_id = 0
     current_author_id = 0
-    if type == 'publisher':
-        current_publisher_id = int(id)
-    elif type == 'author':
-        current_author_id = int(id)
+    if field_type == 'publisher':
+        current_publisher_id = int(field_id)
+    elif field_type == 'author':
+        current_author_id = int(field_id)
 
     book_form = myforms.BookForm()
 
@@ -207,7 +245,7 @@ def add_book(request,id = 0, type = 'src'):
 
         if book_form.is_valid():
             book_obj = models.Book.objects.create(
-                title =  book_form.cleaned_data.get('title'),
+                title = book_form.cleaned_data.get('title'),
                 price = book_form.cleaned_data.get('price'),
                 publish_date = publish_date,
                 publisher_id = publisher_id,
@@ -224,9 +262,16 @@ def add_book(request,id = 0, type = 'src'):
                                             "current_publisher_id":current_publisher_id})
 
 
-# 修改书
-def update_book(request,id,type_id = 0, type = 'src'):
-    book = models.Book.objects.filter(id=id).first()
+def update_book(request, book_id, field_id = 0, field_type = 'src'):
+    '''
+    修改书
+    :param request:
+    :param book_id:
+    :param field_id:
+    :param field_type:
+    :return:
+    '''
+    book = models.Book.objects.filter(id=book_id).first()
     book_form = myforms.BookForm()
     book_form.initial = {'title':book.title,'price':book.price}
 
@@ -239,7 +284,7 @@ def update_book(request,id,type_id = 0, type = 'src'):
         book_form = myforms.BookForm(request.POST)
 
         if book_form.is_valid():
-            models.Book.objects.filter(id=id).update(
+            models.Book.objects.filter(id=book_id).update(
                 title=book_form.cleaned_data.get('title'),
                 price=book_form.cleaned_data.get('price'),
                 publish_date=publish_date,
@@ -247,10 +292,9 @@ def update_book(request,id,type_id = 0, type = 'src'):
             )
 
             # 有3种情况，分别跳到自己对应的页面下
-            if type == 'publisher':
-                new_url = reverse('book:book_list')+type_id+'/'+type
-            elif type == 'author':
-                new_url = reverse('book:book_list')+type_id+'/'+type
+
+            if field_type in ('publisher','author'):
+                new_url = reverse('book:book_list') + field_id + '/' + field_type
             else:
                 new_url = reverse('book:book_list')
 
@@ -263,9 +307,13 @@ def update_book(request,id,type_id = 0, type = 'src'):
                                               'publish_date':book.publish_date})
 
 
-# 出版社列表
 # @check_login
 def publisher_list(request):
+    '''
+    出版社列表
+    :param request:
+    :return:
+    '''
     publishers = models.Publisher.objects.all().order_by('-id')
     current_page_num = request.GET.get('page',1)
     page_obj = MyPaginator(publishers,current_page_num)
@@ -273,8 +321,12 @@ def publisher_list(request):
     return render(request,'publisher_list.html',page_obj.show_page)
 
 
-# 删除一个出版社
 def del_publisher(request):
+    '''
+    删除一个出版社
+    :param request:
+    :return:
+    '''
     delete_id = request.POST.get('delete_id')
     try:
         models.Publisher.objects.filter(id=delete_id).delete()
@@ -285,8 +337,12 @@ def del_publisher(request):
     return HttpResponse(json.dumps(reg))
 
 
-# 增加出版社
 def add_publisher(request):
+    '''
+    增加出版社
+    :param request:
+    :return:
+    '''
     publisher_form = myforms.PublisherForm()
     if request.method == 'POST':
         publisher_form = myforms.PublisherForm(request.POST)
@@ -297,24 +353,33 @@ def add_publisher(request):
     return render(request,'add_publisher.html',{'publisher_form':publisher_form})
 
 
-# 修改出版社
-def update_publisher(request,id):
-    publisher = models.Publisher.objects.filter(id=id).first()
+def update_publisher(request,publisher_id):
+    '''
+    修改出版社
+    :param request:
+    :param publisher_id:
+    :return:
+    '''
+    publisher = models.Publisher.objects.filter(id=publisher_id).first()
     publisher_form = myforms.PublisherForm()
     publisher_form.initial = {'name': publisher.name}  # 对forms组件初始化
 
     if request.method == 'POST':
         publisher_form = myforms.PublisherForm(request.POST)
         if publisher_form.is_valid():
-            models.Publisher.objects.filter(id=id).update(**publisher_form.cleaned_data)
+            models.Publisher.objects.filter(id=publisher_id).update(**publisher_form.cleaned_data)
             return redirect(reverse('book:publisher_list'))
 
     return render(request, 'update_publisher.html', {'publisher_form': publisher_form})
 
 
-# 作者列表
 # @check_login
 def author_list(request):
+    '''
+     作者列表
+    :param request:
+    :return:
+    '''
     authors = models.Author.objects.all().values('id','detail_id','name','detail__age','detail__addr').order_by('-id')
     current_page_num = request.GET.get('page')
     page_obj = MyPaginator(authors,current_page_num)
@@ -322,8 +387,12 @@ def author_list(request):
     return render(request,'author_list.html',page_obj.show_page)
 
 
-# 删除一个作者
 def del_author(request):
+    '''
+    删除一个作者
+    :param request:
+    :return:
+    '''
     delete_id = request.POST.get('delete_id')
     try:
         # 删Author关联的不会被删掉
@@ -338,8 +407,12 @@ def del_author(request):
     return HttpResponse(json.dumps(reg))
 
 
-# 增加作者
 def add_author(request):
+    '''
+    增加作者
+    :param request:
+    :return:
+    '''
     author_form = myforms.AuthorForm()
     if request.method == 'POST':
         author_form = myforms.AuthorForm(request.POST)
@@ -356,9 +429,14 @@ def add_author(request):
     return render(request,'add_author.html',{'author_form':author_form})
 
 
-# 修改作者
-def update_author(request,id):
-    author = models.Author.objects.filter(id=id).values('name','detail__age','detail__addr').first()
+def update_author(request,author_id):
+    '''
+    修改作者
+    :param request:
+    :param author_id:
+    :return:
+    '''
+    author = models.Author.objects.filter(id=author_id).values('name','detail__age','detail__addr').first()
     author_form = myforms.AuthorForm()
     author_form.initial = {'name':author.get('name'),'age':author.get('detail__age'),'addr':author.get('detail__addr')}
 
@@ -369,8 +447,8 @@ def update_author(request,id):
             age = author_form.cleaned_data.get('age')
             addr = author_form.cleaned_data.get('addr')
 
-            models.Author.objects.filter(id=id).update(name=name)
-            models.AuthorDetail.objects.filter(author__id=id).update(age=age,addr=addr)
+            models.Author.objects.filter(id=author_id).update(name=name)
+            models.AuthorDetail.objects.filter(author__id=author_id).update(age=age,addr=addr)
 
             return redirect(reverse('book:author_list'))
 
